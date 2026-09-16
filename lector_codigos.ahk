@@ -1,31 +1,6 @@
 ; ============================================================
 ;  LECTOR DE CÓDIGOS - El Cholo Repuestos
-;
-;  NO requiere configurar el lector de código de barras.
-;  Funciona con el lector en modo de fábrica (tipea el código
-;  y manda Enter al final).
-;
-;  Cómo funciona:
-;  - Solo actúa dentro de la ventana "Ingreso y Modificación
-;    de Ítems" de tu sistema de facturación.
-;  - Cuando aparece un Enter ahí, en vez de dejarlo pasar de
-;    una, primero lee lo que quedó tipeado en el campo con
-;    foco (copiándolo), lo busca en la base de códigos, y:
-;      · Si lo encuentra: borra lo tipeado y escribe el
-;        CÓDIGO correcto. NO manda Enter — vos revisás el
-;        precio y aceptás a mano (con Enter o el botón).
-;      · Si corresponde a varios artículos: te deja elegir.
-;      · Si no lo encuentra: te deja buscar el artículo y
-;        asignárselo (queda guardado para la próxima vez).
-;    Si el campo está vacío, el Enter se comporta normal.
-;
-;  REQUIERE: AutoHotkey v2  (https://www.autohotkey.com/)
-;
-;  IMPORTANTE - Ajustá esto a tu PC:
-;  Si el título de la ventana en tu sistema es distinto a
-;  "Ingreso y Modificación de Ítems", cambialo en la variable
-;  TituloVentana más abajo (alcanza con que sea parte del
-;  título, no hace falta que sea exacto).
+;  AutoHotkey v2
 ; ============================================================
 #Requires AutoHotkey v2.0
 #SingleInstance Force
@@ -33,186 +8,179 @@ Persistent
 SetTitleMatchMode(2)
 
 TituloVentana := "Ingreso y Modificación de Ítems"
-
-; --- Archivos ---
 ArchivoBase := A_ScriptDir "\codigos.tsv"
 ArchivoArticulos := A_ScriptDir "\articulos.tsv"
 ArchivoAgregados := A_ScriptDir "\codigos_agregados.tsv"
 
-; --- Datos en memoria ---
-Codigos := Map()             ; clave -> "cod1|desc1;;cod2|desc2..."
+Codigos := Map()
 Codigos.CaseSense := false
-Articulos := []              ; [{codigo, desc}, ...] para el buscador
+Articulos := []
+
+NormalizarCodigo(valor) {
+    valor := StrReplace(valor, Chr(0xFEFF), "")
+    valor := StrReplace(valor, "`r", "")
+    valor := StrReplace(valor, "`n", "")
+    return Trim(valor)
+}
+
+AgregarCandidato(clave, codigo, desc) {
+    global Codigos
+    clave := NormalizarCodigo(clave)
+    codigo := NormalizarCodigo(codigo)
+    desc := Trim(desc)
+    if clave = "" || codigo = ""
+        return
+    if !Codigos.Has(clave)
+        Codigos[clave] := []
+    for candidato in Codigos[clave] {
+        if candidato.codigo = codigo && candidato.desc = desc
+            return
+    }
+    Codigos[clave].Push({codigo: codigo, desc: desc})
+}
+
+CargarLineaCodigo(linea) {
+    partes := StrSplit(linea, "`t")
+    if partes.Length < 2
+        return
+    clave := NormalizarCodigo(partes[1])
+    candidatos := StrSplit(partes[2], ";;")
+    for candidato in candidatos {
+        p := StrSplit(candidato, "|")
+        if p.Length >= 1 {
+            codigo := p[1]
+            desc := p.Length >= 2 ? p[2] : ""
+            AgregarCandidato(clave, codigo, desc)
+        }
+    }
+}
 
 CargarBase() {
     global Codigos, Articulos, ArchivoBase, ArchivoArticulos, ArchivoAgregados
-
     if !FileExist(ArchivoBase) {
         MsgBox("No encuentro codigos.tsv al lado del script. Lo necesito para funcionar.", "Lector de Códigos", "Icon!")
         ExitApp()
     }
     Loop Read, ArchivoBase
         CargarLineaCodigo(A_LoopReadLine)
-
     if FileExist(ArchivoAgregados)
         Loop Read, ArchivoAgregados
             CargarLineaCodigo(A_LoopReadLine)
-
     if FileExist(ArchivoArticulos) {
         Loop Read, ArchivoArticulos {
             partes := StrSplit(A_LoopReadLine, "`t")
-            if partes.Length >= 1
-                Articulos.Push({codigo: Trim(partes[1]), desc: partes.Length >= 2 ? Trim(partes[2]) : ""})
+            if partes.Length >= 1 {
+                codigo := NormalizarCodigo(partes[1])
+                desc := partes.Length >= 2 ? Trim(partes[2]) : ""
+                if codigo != ""
+                    Articulos.Push({codigo: codigo, desc: desc})
+            }
         }
     }
 }
 
-CargarLineaCodigo(linea) {
-    global Codigos
-    partes := StrSplit(linea, "`t")
-    if partes.Length < 2
-        return
-    clave := Trim(partes[1])
-    if clave != ""
-        Codigos[clave] := partes[2]
-}
-
 CargarBase()
 
-; ============================================================
-;  Solo actúa cuando esa ventana puntual está activa
-; ============================================================
 #HotIf WinActive(TituloVentana)
 Enter:: {
     ventanaOrigen := WinExist("A")
-
-    texto := ""
+    controlOrigen := ""
     try {
-        ctl := ControlGetFocus("A")
-        texto := Trim(ControlGetText(ctl, "A"))
+        controlOrigen := ControlGetFocus("A")
     } catch {
-        texto := ""
+        controlOrigen := ""
     }
 
-    ; Si por lo que sea no se pudo leer el control directamente,
-    ; probamos con el método anterior (portapapeles) como respaldo
-    if texto = "" {
-        clipAnterior := ClipboardAll()
+    texto := ""
+    clipAnterior := ClipboardAll()
+    try {
         A_Clipboard := ""
+        if controlOrigen != ""
+            ControlFocus(controlOrigen, "A")
         Send("^a")
         Send("^c")
-        huboTexto := ClipWait(0.3)
-        texto := huboTexto ? Trim(A_Clipboard) : ""
+        if ClipWait(0.5)
+            texto := NormalizarCodigo(A_Clipboard)
+    } finally {
         A_Clipboard := clipAnterior
     }
 
     if texto = "" {
-        Send("{Enter}")  ; campo vacío u otra situación -> Enter normal
+        Send("{Enter}")
         return
     }
-
-    ProcesarCodigo(texto, ventanaOrigen)
+    ProcesarCodigo(texto, ventanaOrigen, controlOrigen)
 }
 #HotIf
 
-; ============================================================
-;  Busca el código y actúa según el resultado
-; ============================================================
-ProcesarCodigo(codigoEscaneado, ventanaOrigen) {
+ProcesarCodigo(codigoEscaneado, ventanaOrigen, controlOrigen) {
     global Codigos
-    clave := Trim(codigoEscaneado)
-
+    clave := NormalizarCodigo(codigoEscaneado)
     if !Codigos.Has(clave) {
-        SoundBeep(300, 200)  ; beep grave = no encontrado
-        MostrarAsignar(clave, ventanaOrigen)
+        SoundBeep(300, 200)
+        MostrarAsignar(clave, ventanaOrigen, controlOrigen)
         return
     }
-
-    candidatos := StrSplit(Codigos[clave], ";;")
-
+    candidatos := Codigos[clave]
     if candidatos.Length = 1 {
-        partes := StrSplit(candidatos[1], "|")
-        TipearCodigo(partes[1], ventanaOrigen)
-        SoundBeep(1200, 80)  ; beep agudo corto = OK
+        TipearCodigo(candidatos[1].codigo, ventanaOrigen, controlOrigen)
+        SoundBeep(1200, 80)
     } else {
-        MostrarSelector(candidatos, ventanaOrigen)
+        MostrarSelector(candidatos, ventanaOrigen, controlOrigen)
     }
 }
 
-; Reemplaza lo que haya en el campo con foco por el código correcto
-; (sin apretar Enter, para que se pueda revisar el precio antes)
-TipearCodigo(codigo, ventanaOrigen) {
+TipearCodigo(codigo, ventanaOrigen, controlOrigen) {
+    codigo := NormalizarCodigo(codigo)
     if ventanaOrigen && WinExist("ahk_id " ventanaOrigen)
         WinActivate("ahk_id " ventanaOrigen)
+    Sleep(50)
+    if controlOrigen != "" {
+        try {
+            ControlFocus(controlOrigen, "ahk_id " ventanaOrigen)
+        } catch {
+        }
+    }
+    Send("^a")
+    SendText(codigo)
     Sleep(30)
-
-    escrito := false
-    try {
-        ctl := ControlGetFocus("A")
-        ControlSetText(codigo, ctl, "A")
-        ControlFocus(ctl, "A")
-        ; "toque" inofensivo (espacio + borrar) para que el sistema dispare
-        ; su refresco de descripción/precio si depende de tecleo, sin
-        ; alterar el código que acabamos de poner
-        Send("{End}{Space}{BackSpace}")
-        escrito := true
-    } catch {
-        escrito := false
-    }
-
-    if !escrito {
-        Send("^a")
-        SendInput(codigo)
-    }
+    Send("{End}{Space}{Backspace}")
 }
 
-; ============================================================
-;  Elegir cuando el código corresponde a varios artículos
-; ============================================================
-MostrarSelector(candidatos, ventanaOrigen) {
+MostrarSelector(candidatos, ventanaOrigen, controlOrigen) {
     SoundBeep(700, 150)
     opciones := []
-    for c in candidatos {
-        partes := StrSplit(c, "|")
-        opciones.Push(partes[1] . "  -  " . (partes.Length > 1 ? partes[2] : ""))
-    }
-
+    for candidato in candidatos
+        opciones.Push(candidato.codigo . "  -  " . candidato.desc)
     dlg := Gui("+AlwaysOnTop", "Código ambiguo - Elegí el artículo")
     dlg.SetFont("s10")
     dlg.Add("Text",, "Este código corresponde a varios artículos:")
-    lb := dlg.Add("ListBox", "w480 r6 vSel", opciones)
+    lb := dlg.Add("ListBox", "w480 r8 vSel", opciones)
     btnOk := dlg.Add("Button", "Default w100", "Usar este")
     btnOk.OnEvent("Click", (*) => (
         lb.Value > 0
-            ? (TipearCodigo(StrSplit(candidatos[lb.Value], "|")[1], ventanaOrigen), dlg.Destroy())
+            ? (TipearCodigo(candidatos[lb.Value].codigo, ventanaOrigen, controlOrigen), dlg.Destroy())
             : 0
     ))
     dlg.OnEvent("Close", (*) => dlg.Destroy())
     dlg.Show()
 }
 
-; ============================================================
-;  Asignar un código no encontrado a un artículo existente
-; ============================================================
-MostrarAsignar(codigoEscaneado, ventanaOrigen) {
-    global Articulos, Codigos, ArchivoAgregados
-
+MostrarAsignar(codigoEscaneado, ventanaOrigen, controlOrigen) {
+    global Articulos, ArchivoAgregados
     dlg := Gui("+AlwaysOnTop", "Código no encontrado: " codigoEscaneado)
     dlg.SetFont("s10")
     dlg.Add("Text",, "No encontré ese código. Buscá el artículo para asignárselo:")
     txt := dlg.Add("Edit", "w480 vBusqueda")
     lv := dlg.Add("ListView", "w480 r10", ["Código", "Descripción"])
-    lv.ModifyCol(1, 110)
-    lv.ModifyCol(2, 360)
-
+    lv.ModifyCol(1, 130)
+    lv.ModifyCol(2, 340)
     ActualizarLista(lv, Articulos, "")
     txt.OnEvent("Change", (*) => ActualizarLista(lv, Articulos, txt.Value))
-
     btnAsignar := dlg.Add("Button", "Default w150", "Asignar y tipear")
-    btnAsignar.OnEvent("Click", (*) => AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen))
+    btnAsignar.OnEvent("Click", (*) => AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen, controlOrigen))
     btnCancelar := dlg.Add("Button", "w100 x+10", "Cancelar")
     btnCancelar.OnEvent("Click", (*) => dlg.Destroy())
-
     dlg.OnEvent("Close", (*) => dlg.Destroy())
     dlg.Show()
 }
@@ -231,8 +199,8 @@ ActualizarLista(lv, articulos, filtro) {
     }
 }
 
-AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen) {
-    global Codigos, ArchivoAgregados
+AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen, controlOrigen) {
+    global ArchivoAgregados
     fila := lv.GetNext(0)
     if !fila {
         MsgBox("Elegí un artículo de la lista primero.")
@@ -240,16 +208,12 @@ AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen) {
     }
     codigo := lv.GetText(fila, 1)
     desc := lv.GetText(fila, 2)
-
-    Codigos[codigoEscaneado] := codigo "|" desc
+    codigoEscaneado := NormalizarCodigo(codigoEscaneado)
+    AgregarCandidato(codigoEscaneado, codigo, desc)
     FileAppend(codigoEscaneado "`t" codigo "|" desc "`n", ArchivoAgregados, "UTF-8")
-
     dlg.Destroy()
-    TipearCodigo(codigo, ventanaOrigen)
+    TipearCodigo(codigo, ventanaOrigen, controlOrigen)
     SoundBeep(1200, 80)
 }
 
-; ============================================================
-;  Ícono en la bandeja para confirmar que está corriendo
-; ============================================================
 TrayTip("Lector de Códigos activo", "El Cholo Repuestos - escuchando el lector")
