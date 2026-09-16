@@ -1,10 +1,6 @@
 ; ============================================================
 ;  LECTOR DE CÓDIGOS - El Cholo Repuestos
 ;  AutoHotkey v2
-;
-;  El lector funciona como teclado: escribe el código y manda Enter.
-;  El script solo intercepta Enter cuando está activa la ventana
-;  "Ingreso y Modificación de Ítems".
 ; ============================================================
 #Requires AutoHotkey v2.0
 #SingleInstance Force
@@ -12,7 +8,6 @@ Persistent
 SetTitleMatchMode(2)
 
 TituloVentana := "Ingreso y Modificación de Ítems"
-
 ArchivoBase := A_ScriptDir "\codigos.tsv"
 ArchivoArticulos := A_ScriptDir "\articulos.tsv"
 ArchivoAgregados := A_ScriptDir "\codigos_agregados.tsv"
@@ -90,12 +85,12 @@ CargarBase()
 Enter:: {
     ventanaOrigen := WinExist("A")
     controlOrigen := ""
-    try controlOrigen := ControlGetFocus("A")
-    catch controlOrigen := ""
+    try {
+        controlOrigen := ControlGetFocus("A")
+    } catch {
+        controlOrigen := ""
+    }
 
-    ; En Mercurio, ControlGetText solo devuelve una parte del contenido.
-    ; Como el scanner funciona como teclado, capturamos el campo mediante
-    ; Ctrl+A/C para obtener exactamente el texto que ve el usuario.
     texto := ""
     clipAnterior := ClipboardAll()
     try {
@@ -140,16 +135,14 @@ TipearCodigo(codigo, ventanaOrigen, controlOrigen) {
     if ventanaOrigen && WinExist("ahk_id " ventanaOrigen)
         WinActivate("ahk_id " ventanaOrigen)
     Sleep(50)
-
-    ; No usamos ControlSetText: en Mercurio este control puede dejar parte
-    ; del código escaneado. Simulamos escritura real de teclado.
     if controlOrigen != "" {
-        try ControlFocus(controlOrigen, "ahk_id " ventanaOrigen)
+        try {
+            ControlFocus(controlOrigen, "ahk_id " ventanaOrigen)
+        } catch {
+        }
     }
     Send("^a")
     SendText(codigo)
-
-    ; Fuerza refresco de precio/descripción.
     Sleep(30)
     Send("{End}{Space}{Backspace}")
 }
@@ -174,7 +167,7 @@ MostrarSelector(candidatos, ventanaOrigen, controlOrigen) {
 }
 
 MostrarAsignar(codigoEscaneado, ventanaOrigen, controlOrigen) {
-    global Articulos, Codigos, ArchivoAgregados
+    global Articulos, ArchivoAgregados
     dlg := Gui("+AlwaysOnTop", "Código no encontrado: " codigoEscaneado)
     dlg.SetFont("s10")
     dlg.Add("Text",, "No encontré ese código. Buscá el artículo para asignárselo:")
@@ -207,7 +200,7 @@ ActualizarLista(lv, articulos, filtro) {
 }
 
 AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen, controlOrigen) {
-    global Codigos, ArchivoAgregados
+    global ArchivoAgregados
     fila := lv.GetNext(0)
     if !fila {
         MsgBox("Elegí un artículo de la lista primero.")
