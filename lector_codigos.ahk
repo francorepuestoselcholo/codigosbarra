@@ -17,12 +17,11 @@ ArchivoBase := A_ScriptDir "\codigos.tsv"
 ArchivoArticulos := A_ScriptDir "\articulos.tsv"
 ArchivoAgregados := A_ScriptDir "\codigos_agregados.tsv"
 
-Codigos := Map()                 ; clave -> array de candidatos {codigo, desc}
+Codigos := Map()
 Codigos.CaseSense := false
-Articulos := []                  ; [{codigo, desc}, ...]
+Articulos := []
 
 NormalizarCodigo(valor) {
-    ; Quita BOM, espacios y saltos de línea que pueden venir de TSV/lector.
     valor := StrReplace(valor, Chr(0xFEFF), "")
     valor := StrReplace(valor, "`r", "")
     valor := StrReplace(valor, "`n", "")
@@ -36,11 +35,8 @@ AgregarCandidato(clave, codigo, desc) {
     desc := Trim(desc)
     if clave = "" || codigo = ""
         return
-
     if !Codigos.Has(clave)
         Codigos[clave] := []
-
-    ; Evita duplicar exactamente el mismo artículo si aparece repetido en los TSV.
     for candidato in Codigos[clave] {
         if candidato.codigo = codigo && candidato.desc = desc
             return
@@ -52,11 +48,8 @@ CargarLineaCodigo(linea) {
     partes := StrSplit(linea, "`t")
     if partes.Length < 2
         return
-
     clave := NormalizarCodigo(partes[1])
-    valor := partes[2]
-    candidatos := StrSplit(valor, ";;")
-
+    candidatos := StrSplit(partes[2], ";;")
     for candidato in candidatos {
         p := StrSplit(candidato, "|")
         if p.Length >= 1 {
@@ -69,19 +62,15 @@ CargarLineaCodigo(linea) {
 
 CargarBase() {
     global Codigos, Articulos, ArchivoBase, ArchivoArticulos, ArchivoAgregados
-
     if !FileExist(ArchivoBase) {
         MsgBox("No encuentro codigos.tsv al lado del script. Lo necesito para funcionar.", "Lector de Códigos", "Icon!")
         ExitApp()
     }
-
     Loop Read, ArchivoBase
         CargarLineaCodigo(A_LoopReadLine)
-
     if FileExist(ArchivoAgregados)
         Loop Read, ArchivoAgregados
             CargarLineaCodigo(A_LoopReadLine)
-
     if FileExist(ArchivoArticulos) {
         Loop Read, ArchivoArticulos {
             partes := StrSplit(A_LoopReadLine, "`t")
@@ -101,26 +90,23 @@ CargarBase()
 Enter:: {
     ventanaOrigen := WinExist("A")
     controlOrigen := ""
+    try controlOrigen := ControlGetFocus("A")
+    catch controlOrigen := ""
 
-    try {
-        controlOrigen := ControlGetFocus("A")
-    } catch {
-        controlOrigen := ""
-    }
-
+    ; En Mercurio, ControlGetText solo devuelve una parte del contenido.
+    ; Como el scanner funciona como teclado, capturamos el campo mediante
+    ; Ctrl+A/C para obtener exactamente el texto que ve el usuario.
     texto := ""
-    if controlOrigen != "" {
-        try texto := NormalizarCodigo(ControlGetText(controlOrigen, "A"))
-    }
-
-    ; Respaldo para controles que no permiten ControlGetText.
-    if texto = "" {
-        clipAnterior := ClipboardAll()
+    clipAnterior := ClipboardAll()
+    try {
         A_Clipboard := ""
+        if controlOrigen != ""
+            ControlFocus(controlOrigen, "A")
         Send("^a")
         Send("^c")
-        if ClipWait(0.3)
+        if ClipWait(0.5)
             texto := NormalizarCodigo(A_Clipboard)
+    } finally {
         A_Clipboard := clipAnterior
     }
 
@@ -128,7 +114,6 @@ Enter:: {
         Send("{Enter}")
         return
     }
-
     ProcesarCodigo(texto, ventanaOrigen, controlOrigen)
 }
 #HotIf
@@ -136,15 +121,12 @@ Enter:: {
 ProcesarCodigo(codigoEscaneado, ventanaOrigen, controlOrigen) {
     global Codigos
     clave := NormalizarCodigo(codigoEscaneado)
-
     if !Codigos.Has(clave) {
         SoundBeep(300, 200)
         MostrarAsignar(clave, ventanaOrigen, controlOrigen)
         return
     }
-
     candidatos := Codigos[clave]
-
     if candidatos.Length = 1 {
         TipearCodigo(candidatos[1].codigo, ventanaOrigen, controlOrigen)
         SoundBeep(1200, 80)
@@ -155,62 +137,44 @@ ProcesarCodigo(codigoEscaneado, ventanaOrigen, controlOrigen) {
 
 TipearCodigo(codigo, ventanaOrigen, controlOrigen) {
     codigo := NormalizarCodigo(codigo)
-
     if ventanaOrigen && WinExist("ahk_id " ventanaOrigen)
         WinActivate("ahk_id " ventanaOrigen)
     Sleep(50)
 
-    escrito := false
-
-    ; Usamos el mismo control que tenía el foco al escanear.
+    ; No usamos ControlSetText: en Mercurio este control puede dejar parte
+    ; del código escaneado. Simulamos escritura real de teclado.
     if controlOrigen != "" {
-        try {
-            ControlFocus(controlOrigen, "ahk_id " ventanaOrigen)
-            ControlSetText(codigo, controlOrigen, "ahk_id " ventanaOrigen)
-            escrito := true
-        }
+        try ControlFocus(controlOrigen, "ahk_id " ventanaOrigen)
     }
+    Send("^a")
+    SendText(codigo)
 
-    ; Fallback para controles que no acepten ControlSetText.
-    if !escrito {
-        Send("^a")
-        SendText(codigo)
-        escrito := true
-    }
-
-    ; Fuerza refresco de formularios que actualizan precio/descripción al teclear.
-    if escrito {
-        Sleep(30)
-        Send("{End}{Space}{Backspace}")
-    }
+    ; Fuerza refresco de precio/descripción.
+    Sleep(30)
+    Send("{End}{Space}{Backspace}")
 }
 
 MostrarSelector(candidatos, ventanaOrigen, controlOrigen) {
     SoundBeep(700, 150)
-
     opciones := []
     for candidato in candidatos
         opciones.Push(candidato.codigo . "  -  " . candidato.desc)
-
     dlg := Gui("+AlwaysOnTop", "Código ambiguo - Elegí el artículo")
     dlg.SetFont("s10")
     dlg.Add("Text",, "Este código corresponde a varios artículos:")
     lb := dlg.Add("ListBox", "w480 r8 vSel", opciones)
     btnOk := dlg.Add("Button", "Default w100", "Usar este")
-
     btnOk.OnEvent("Click", (*) => (
         lb.Value > 0
             ? (TipearCodigo(candidatos[lb.Value].codigo, ventanaOrigen, controlOrigen), dlg.Destroy())
             : 0
     ))
-
     dlg.OnEvent("Close", (*) => dlg.Destroy())
     dlg.Show()
 }
 
 MostrarAsignar(codigoEscaneado, ventanaOrigen, controlOrigen) {
     global Articulos, Codigos, ArchivoAgregados
-
     dlg := Gui("+AlwaysOnTop", "Código no encontrado: " codigoEscaneado)
     dlg.SetFont("s10")
     dlg.Add("Text",, "No encontré ese código. Buscá el artículo para asignárselo:")
@@ -218,15 +182,12 @@ MostrarAsignar(codigoEscaneado, ventanaOrigen, controlOrigen) {
     lv := dlg.Add("ListView", "w480 r10", ["Código", "Descripción"])
     lv.ModifyCol(1, 130)
     lv.ModifyCol(2, 340)
-
     ActualizarLista(lv, Articulos, "")
     txt.OnEvent("Change", (*) => ActualizarLista(lv, Articulos, txt.Value))
-
     btnAsignar := dlg.Add("Button", "Default w150", "Asignar y tipear")
     btnAsignar.OnEvent("Click", (*) => AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen, controlOrigen))
     btnCancelar := dlg.Add("Button", "w100 x+10", "Cancelar")
     btnCancelar.OnEvent("Click", (*) => dlg.Destroy())
-
     dlg.OnEvent("Close", (*) => dlg.Destroy())
     dlg.Show()
 }
@@ -235,7 +196,6 @@ ActualizarLista(lv, articulos, filtro) {
     lv.Delete()
     filtro := Trim(filtro)
     contador := 0
-
     for a in articulos {
         if filtro = "" || InStr(a.codigo, filtro) || InStr(a.desc, filtro) {
             lv.Add(, a.codigo, a.desc)
@@ -248,20 +208,16 @@ ActualizarLista(lv, articulos, filtro) {
 
 AsignarSeleccion(dlg, lv, codigoEscaneado, ventanaOrigen, controlOrigen) {
     global Codigos, ArchivoAgregados
-
     fila := lv.GetNext(0)
     if !fila {
         MsgBox("Elegí un artículo de la lista primero.")
         return
     }
-
     codigo := lv.GetText(fila, 1)
     desc := lv.GetText(fila, 2)
     codigoEscaneado := NormalizarCodigo(codigoEscaneado)
-
     AgregarCandidato(codigoEscaneado, codigo, desc)
     FileAppend(codigoEscaneado "`t" codigo "|" desc "`n", ArchivoAgregados, "UTF-8")
-
     dlg.Destroy()
     TipearCodigo(codigo, ventanaOrigen, controlOrigen)
     SoundBeep(1200, 80)
